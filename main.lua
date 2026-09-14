@@ -1,67 +1,88 @@
 --//=========================================================
---// 크랙본 by R0W | Full build + config persistence
---// F1 UI, F2 purge. Drag via top bar. All toggles OFF on fresh install.
+--// 크랙본 by R0W | Full build
+--// TeamCheck removed. Auto-saves config. DataModel-safe.
+--// F1 UI, F2 purge.
 --//=========================================================
 
-local Players           = game:GetService("Players")
+--// GAME CONTEXT GUARD — skip if not in a game DataModel
+local okPlayers, Players = pcall(function() return game:GetService("Players") end)
+if not okPlayers or not Players then
+    return
+end
+local okLP, LP = pcall(function() return Players.LocalPlayer end)
+if not okLP or not LP then
+    return
+end
+
 local RunService        = game:GetService("RunService")
 local UserInputService  = game:GetService("UserInputService")
 local CoreGui           = game:GetService("CoreGui")
 local Lighting          = game:GetService("Lighting")
 local HttpService       = game:GetService("HttpService")
 
-local LP = Players.LocalPlayer
-
 if cleardrawcache then pcall(cleardrawcache) end
 for _, g in ipairs(CoreGui:GetChildren()) do
     if g.Name == "crackbonUI" or g.Name == "SerotoninUI" then pcall(function() g:Destroy() end) end
 end
 
---// SAVE SYSTEM
+--//=========================================================
+--// SAVE SYSTEM — debounced
+--//=========================================================
 local Save = {
     path = "crackbon_cfg.json",
     entries = {},
-    canSave = (typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function"),
+    canSave = (type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"),
+    pending = false,
+    flushDelay = 1.5,
 }
-
-local function registerSave(key, getter, setter)
-    Save.entries[key] = { get = getter, set = setter }
-end
-
-local function saveConfig()
-    if not Save.canSave then return end
+local function registerSave(key, getter, setter) Save.entries[key] = { get = getter, set = setter } end
+local function buildData()
     local data = {}
     for k, e in pairs(Save.entries) do
         local ok, v = pcall(e.get)
         if ok then data[k] = v end
     end
-    pcall(function()
-        writefile(Save.path, HttpService:JSONEncode(data))
-    end)
+    return data
 end
-
+local function flushSave()
+    if not Save.canSave then return end
+    Save.pending = false
+    local data = buildData()
+    local ok, encoded = pcall(function() return HttpService:JSONEncode(data) end)
+    if not ok or not encoded then return end
+    pcall(function() writefile(Save.path, encoded) end)
+end
+local function requestSave() if Save.canSave then Save.pending = true end end
+local function saveNow()
+    if not Save.canSave then return end
+    Save.pending = false
+    flushSave()
+end
+task.spawn(function()
+    while task.wait(0.5) do
+        if Save.pending then
+            task.wait(Save.flushDelay)
+            if Save.pending then flushSave() end
+        end
+    end
+end)
 local function loadConfig()
     if not Save.canSave then return false end
-    local ok1 = pcall(function() return isfile(Save.path) end)
-    if not ok1 then return false end
-    local exists = pcall(function() return isfile(Save.path) end) and isfile(Save.path)
+    local exists = false
+    pcall(function() exists = isfile(Save.path) end)
     if not exists then return false end
-
     local content
     if not pcall(function() content = readfile(Save.path) end) then return false end
     if not content or content == "" then return false end
-
     local data
     if not pcall(function() data = HttpService:JSONDecode(content) end) then return false end
     if type(data) ~= "table" then return false end
-
     for k, v in pairs(data) do
         local e = Save.entries[k]
         if e then pcall(e.set, v) end
     end
     return true
 end
-
 local function resetConfig()
     if Save.canSave then
         pcall(function() if isfile(Save.path) then delfile(Save.path) end end)
@@ -76,11 +97,14 @@ local function unreg(d)
 end
 local function removeDrawing(d)
     if not d then return end
-    pcall(function() d.Visible = false end); pcall(function() d:Remove() end); unreg(d)
+    pcall(function() d.Visible = false end)
+    pcall(function() d:Remove() end)
+    unreg(d)
 end
 local function purgeAll()
     for _, d in ipairs(Registry.all) do
-        pcall(function() d.Visible = false end); pcall(function() d:Remove() end)
+        pcall(function() d.Visible = false end)
+        pcall(function() d:Remove() end)
     end
     Registry.all = {}
 end
@@ -105,59 +129,65 @@ local function inputToBind(input)
     end
     return nil
 end
-
 local function inputMatchesBind(input, bind)
     if not bind or not input then return false end
     if bind.kind == "key" then
         return input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == bind.value
     end
-    if bind.kind == "mouse" then
-        return input.UserInputType == bind.value
-    end
+    if bind.kind == "mouse" then return input.UserInputType == bind.value end
     return false
 end
 
---// CONFIG
-local DEFAULT_BIND = { kind="key", value=Enum.KeyCode.LeftShift, name="LeftShift" }
+--// WEAPON KR MAP
+local WEAPON_KR = {
+    ["Pistol"]="권총",["Revolver"]="리볼버",["Deagle"]="데저트이글",
+    ["SMG"]="기관단총",["Uzi"]="우지",["MP5"]="MP5",["Rifle"]="소총",
+    ["AssaultRifle"]="돌격소총",["AK47"]="AK-47",["M4"]="M4",
+    ["Shotgun"]="산탄총",["Sniper"]="저격총",["SniperRifle"]="저격소총",
+    ["Bow"]="활",["Crossbow"]="석궁",["RPG"]="로켓발사기",["Grenade"]="수류탄",
+    ["LMG"]="경기관총",["DMR"]="지정사수소총",["Knife"]="칼",["Sword"]="검",
+    ["Katana"]="카타나",["Minigun"]="미니건",["Flamethrower"]="화염방사기",
+}
+local function weaponNameKR(name)
+    if not name or name == "" then return "?" end
+    if WEAPON_KR[name] then return WEAPON_KR[name] end
+    local stripped = name:gsub("%s+","")
+    if WEAPON_KR[stripped] then return WEAPON_KR[stripped] end
+    return name
+end
 
+--// CONFIG (no TeamCheck)
+local DEFAULT_BIND = { kind="key", value=Enum.KeyCode.LeftShift, name="LeftShift" }
 local Config = {
     Skybox = "Default",
     Visuals = {
-        Enabled=false, TeamCheck=false, VisCheck=false, MaxDistance=1000,
+        Enabled=false, VisCheck=false, MaxDistance=1000,
         Box=false, BoxFilled=false, BoxPadding=0.5,
         Name=false, Distance=false, Health=false, HeadDot=false,
-        Tracer=false, Skeleton=false,
+        Tracer=false, Skeleton=false, Weapon=false,
         Chams=false, ChamsFill=Color3.fromRGB(0,200,200), ChamsOutline=Color3.fromRGB(255,255,255),
         ChamsThroughWalls=true, ChamsTransparency=0.6,
         Color=Color3.fromRGB(0,220,220), TeamColor=false,
     },
     Aimbot = {
-        Enabled=false,
-        TeamCheck=false, VisCheck=false, WallCheck=false,
+        Enabled=false, VisCheck=false, WallCheck=false,
         TargetPart="Head",
         FOV=150, FOVColor=Color3.fromRGB(0,220,220), DrawFOV=false,
         MaxDistance=1000, Smoothness=0.2, Prediction=0.15,
-        Snapline=false,
-        ScriptableCamera=false,
+        Snapline=false, ScriptableCamera=false,
         Offset=Vector3.new(0,0,0),
     },
     Triggerbot = {
-        Enabled=false,
-        UseKey=false,
-        Bind=DEFAULT_BIND,
+        Enabled=false, UseKey=false, Bind=DEFAULT_BIND,
         Mode="FOV",
         FOV=150, FOVColor=Color3.fromRGB(255,90,90), DrawFOV=false,
         TargetPart="Head",
-        KeyFOV=150,
-        KeyAimSmoothness=0.35,
-        KeyPrediction=0.15,
-        TeamCheck=false, VisCheck=false,
+        KeyFOV=150, KeyAimSmoothness=0.35, KeyPrediction=0.15,
+        VisCheck=false,
         Delay=40, ClickDuration=30, Hitchance=100,
-        MaxDistance=500,
-        Burst=false, BurstCount=3,
+        MaxDistance=500, Burst=false, BurstCount=3,
     },
 }
-
 local function readCfg(path)
     local cur = Config
     for p in path:gmatch("[^.]+") do
@@ -174,25 +204,17 @@ local function writeCfg(path, v)
     cur[parts[#parts]] = v
 end
 
---// TEAM
-local function sameTeam(a, b)
-    if not a or not b then return false end
-    if a == b then return true end
-    local ta, tb = a.Team, b.Team
-    if ta and tb and ta == tb then return true end
-    local ca, cb = a.TeamColor, b.TeamColor
-    if ca and cb and ca == cb then return true end
-    return false
-end
+--// TEAM COLOR (visual tinting only)
 local function teamColor(player)
     if player.Team then return player.TeamColor.Color end
     if player.TeamColor then return player.TeamColor.Color end
     return Config.Visuals.Color
 end
 
---// SKY (soft atmosphere tint)
+--//=========================================================
+--// SKYBOX
+--//=========================================================
 local SkyState = { savedSky=nil, savedAtm=nil, savedProps={}, appliedSky=nil, appliedAtm=nil, savedOnce=false }
-
 local function snapshotLighting()
     SkyState.savedProps = {
         FogEnd=Lighting.FogEnd, FogStart=Lighting.FogStart, FogColor=Lighting.FogColor,
@@ -206,14 +228,12 @@ local function snapshotLighting()
     if atm then pcall(function() SkyState.savedAtm = atm:Clone() end) end
     SkyState.savedOnce = true
 end
-
 local function killDynamic()
     for _, v in ipairs(Lighting:GetChildren()) do
         if v:IsA("Sky") or v:IsA("Atmosphere") then pcall(function() v:Destroy() end) end
     end
     SkyState.appliedSky = nil; SkyState.appliedAtm = nil
 end
-
 local function restoreOriginal()
     killDynamic()
     if SkyState.savedSky then local c = SkyState.savedSky:Clone(); c.Parent = Lighting end
@@ -226,7 +246,6 @@ local function restoreOriginal()
         Lighting.GlobalShadows=p.GlobalShadows; Lighting.ExposureCompensation=p.ExposureCompensation
     end
 end
-
 local function applyAtmosphereTint(color, opts)
     opts = opts or {}
     killDynamic()
@@ -239,7 +258,6 @@ local function applyAtmosphereTint(color, opts)
     atm.Offset = 0
     atm.Parent = Lighting
     SkyState.appliedAtm = atm
-
     Lighting.FogStart=0; Lighting.FogEnd=1e9; Lighting.FogColor=Color3.fromRGB(180,180,180)
     Lighting.Ambient = opts.ambient or Color3.fromRGB(110,110,110)
     Lighting.OutdoorAmbient = opts.outdoor or Color3.fromRGB(140,140,140)
@@ -247,12 +265,10 @@ local function applyAtmosphereTint(color, opts)
     if opts.clockTime then Lighting.ClockTime = opts.clockTime end
     Lighting.GlobalShadows = true
 end
-
 local SPACE_SKY = {
     Bk="rbxassetid://159454299", Dn="rbxassetid://159454296", Ft="rbxassetid://159454293",
     Lf="rbxassetid://159454286", Rt="rbxassetid://159454300", Up="rbxassetid://159454288",
 }
-
 local function applyRealSky(images)
     killDynamic()
     local sky = Instance.new("Sky")
@@ -266,37 +282,27 @@ local function applyRealSky(images)
     Lighting.Ambient=Color3.fromRGB(20,20,20); Lighting.OutdoorAmbient=Color3.fromRGB(90,90,90)
     Lighting.Brightness=2; Lighting.ClockTime=14; Lighting.GlobalShadows=true
 end
-
 local function applySkybox(name)
     if not SkyState.savedOnce then snapshotLighting() end
     if name == "Default" then restoreOriginal()
     elseif name == "Space" then applyRealSky(SPACE_SKY)
-    elseif name == "Red" then
-        applyAtmosphereTint(Color3.fromRGB(230,150,150), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(120,100,100),outdoor=Color3.fromRGB(180,140,140)})
-    elseif name == "Orange" then
-        applyAtmosphereTint(Color3.fromRGB(240,190,140), {density=0.20,haze=1.2,glare=0.20,ambient=Color3.fromRGB(130,110,90),outdoor=Color3.fromRGB(200,170,140)})
-    elseif name == "Yellow" then
-        applyAtmosphereTint(Color3.fromRGB(240,230,170), {density=0.20,haze=1.2,glare=0.25,ambient=Color3.fromRGB(140,135,105),outdoor=Color3.fromRGB(210,200,170)})
-    elseif name == "Green" then
-        applyAtmosphereTint(Color3.fromRGB(160,220,175), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(105,130,110),outdoor=Color3.fromRGB(160,200,170)})
-    elseif name == "Blue" then
-        applyAtmosphereTint(Color3.fromRGB(160,190,235), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(105,120,150),outdoor=Color3.fromRGB(160,185,220)})
-    elseif name == "Purple" then
-        applyAtmosphereTint(Color3.fromRGB(205,175,235), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(125,110,150),outdoor=Color3.fromRGB(185,165,215)})
-    elseif name == "Pink" then
-        applyAtmosphereTint(Color3.fromRGB(240,190,215), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(140,115,125),outdoor=Color3.fromRGB(210,180,195)})
-    elseif name == "Night" then
-        applyAtmosphereTint(Color3.fromRGB(60,75,120), {density=0.25,haze=0.8,glare=0,clockTime=0,ambient=Color3.fromRGB(40,50,80),outdoor=Color3.fromRGB(55,70,100),brightness=1.2})
-    elseif name == "Sunset" then
-        applyAtmosphereTint(Color3.fromRGB(240,175,140), {density=0.22,haze=1.5,glare=0.3,clockTime=17.5,ambient=Color3.fromRGB(120,95,85),outdoor=Color3.fromRGB(200,165,140)})
-    elseif name == "Dawn" then
-        applyAtmosphereTint(Color3.fromRGB(235,190,210), {density=0.22,haze=1.3,glare=0.25,clockTime=6,ambient=Color3.fromRGB(120,105,115),outdoor=Color3.fromRGB(200,180,190)})
+    elseif name == "Red" then applyAtmosphereTint(Color3.fromRGB(230,150,150), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(120,100,100),outdoor=Color3.fromRGB(180,140,140)})
+    elseif name == "Orange" then applyAtmosphereTint(Color3.fromRGB(240,190,140), {density=0.20,haze=1.2,glare=0.20,ambient=Color3.fromRGB(130,110,90),outdoor=Color3.fromRGB(200,170,140)})
+    elseif name == "Yellow" then applyAtmosphereTint(Color3.fromRGB(240,230,170), {density=0.20,haze=1.2,glare=0.25,ambient=Color3.fromRGB(140,135,105),outdoor=Color3.fromRGB(210,200,170)})
+    elseif name == "Green" then applyAtmosphereTint(Color3.fromRGB(160,220,175), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(105,130,110),outdoor=Color3.fromRGB(160,200,170)})
+    elseif name == "Blue" then applyAtmosphereTint(Color3.fromRGB(160,190,235), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(105,120,150),outdoor=Color3.fromRGB(160,185,220)})
+    elseif name == "Purple" then applyAtmosphereTint(Color3.fromRGB(205,175,235), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(125,110,150),outdoor=Color3.fromRGB(185,165,215)})
+    elseif name == "Pink" then applyAtmosphereTint(Color3.fromRGB(240,190,215), {density=0.20,haze=1.2,glare=0.15,ambient=Color3.fromRGB(140,115,125),outdoor=Color3.fromRGB(210,180,195)})
+    elseif name == "Night" then applyAtmosphereTint(Color3.fromRGB(60,75,120), {density=0.25,haze=0.8,glare=0,clockTime=0,ambient=Color3.fromRGB(40,50,80),outdoor=Color3.fromRGB(55,70,100),brightness=1.2})
+    elseif name == "Sunset" then applyAtmosphereTint(Color3.fromRGB(240,175,140), {density=0.22,haze=1.5,glare=0.3,clockTime=17.5,ambient=Color3.fromRGB(120,95,85),outdoor=Color3.fromRGB(200,165,140)})
+    elseif name == "Dawn" then applyAtmosphereTint(Color3.fromRGB(235,190,210), {density=0.22,haze=1.3,glare=0.25,clockTime=6,ambient=Color3.fromRGB(120,105,115),outdoor=Color3.fromRGB(200,180,190)})
     end
 end
-
 snapshotLighting()
 
+--//=========================================================
 --// UI
+--//=========================================================
 local parent = (gethui and gethui()) or CoreGui
 local Colors = {
     BG=Color3.fromRGB(28,28,32), Panel=Color3.fromRGB(36,36,42), Header=Color3.fromRGB(22,22,26),
@@ -379,17 +385,15 @@ local function makeToggle(parentCol, label, cfgPath, default, callback)
         if callback then callback(v) end
     end
     apply(default)
-
     if cfgPath then
         registerSave(cfgPath, function() return readCfg(cfgPath) end, function(v)
             writeCfg(cfgPath, v); apply(v)
         end)
     end
-
     box.MouseButton1Click:Connect(function()
         local state = box.BackgroundColor3 ~= Colors.On
         apply(state)
-        if cfgPath then saveConfig() end
+        if cfgPath then requestSave() end
     end)
 end
 
@@ -401,25 +405,26 @@ local function makeSlider(parentCol, label, cfgPath, min, max, default, decimals
     corner(2)
     local fill = new("Frame", {Size=UDim2.new((default-min)/(max-min),0,1,0), BackgroundColor3=Colors.Accent, BorderSizePixel=0, Parent=bar})
     corner(2)
-
     local function setVal(v)
         local rel = (v - min) / (max - min)
         fill.Size = UDim2.new(math.clamp(rel,0,1),0,1,0)
         val.Text = tostring(v)
         if callback then callback(v) end
     end
-
     local dragging = false
     local function update(input)
         local rel = math.clamp((input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
         local v = tonumber(string.format("%."..(decimals or 0).."f", min + (max-min)*rel))
         setVal(v)
-        if cfgPath then saveConfig() end
     end
     bar.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=true; update(i) end end)
     UserInputService.InputChanged:Connect(function(i) if dragging and i.UserInputType==Enum.UserInputType.MouseMovement then update(i) end end)
-    UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end end)
-
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 and dragging then
+            dragging = false
+            if cfgPath then requestSave() end
+        end
+    end)
     if cfgPath then
         registerSave(cfgPath, function() return readCfg(cfgPath) end, function(v) writeCfg(cfgPath, v); setVal(v) end)
     end
@@ -438,16 +443,11 @@ local function makeDropdown(parentCol, label, cfgPath, options, default, callbac
         o.MouseButton1Click:Connect(function()
             btn.Text=opt; list.Visible=false
             if callback then callback(opt) end
-            if cfgPath then saveConfig() end
+            if cfgPath then requestSave() end
         end)
     end
     btn.MouseButton1Click:Connect(function() list.Visible = not list.Visible end)
-
-    local function setVal(v)
-        btn.Text = v
-        if callback then callback(v) end
-    end
-
+    local function setVal(v) btn.Text = v; if callback then callback(v) end end
     if cfgPath then
         registerSave(cfgPath, function() return readCfg(cfgPath) end, function(v) writeCfg(cfgPath, v); setVal(v) end)
     end
@@ -459,11 +459,9 @@ local function makeKeybind(parentCol, label, cfgPath, defaultBind, callback)
     new("TextLabel", {Size=UDim2.new(0.5,0,1,0), BackgroundTransparency=1, Font=Enum.Font.Gotham, Text=label, TextColor3=Colors.Text, TextSize=11, TextXAlignment=Enum.TextXAlignment.Left, Parent=row})
     local btn = new("TextButton", {Size=UDim2.new(0.5,-4,1,0), Position=UDim2.new(0.5,4,0,0), BackgroundColor3=Colors.Panel, BorderSizePixel=0, Font=Enum.Font.Gotham, Text=defaultBind and defaultBind.name or "None", TextColor3=Colors.Text, TextSize=11, Parent=row})
     corner(2)
-
     local listening = false
     local currentBind = defaultBind
     local listenConn = nil
-
     local function stopListening()
         listening = false
         btn.Text = currentBind and currentBind.name or "None"
@@ -471,7 +469,6 @@ local function makeKeybind(parentCol, label, cfgPath, defaultBind, callback)
         btn.TextColor3 = Colors.Text
         if listenConn then listenConn:Disconnect(); listenConn = nil end
     end
-
     local function startListening()
         listening = true
         btn.Text = "Press a key..."
@@ -483,26 +480,17 @@ local function makeKeybind(parentCol, label, cfgPath, defaultBind, callback)
             end
             local b = inputToBind(input)
             if b then
-                currentBind = b
-                btn.Text = b.name
+                currentBind = b; btn.Text = b.name
                 if callback then callback(b) end
-                if cfgPath then saveConfig() end
+                if cfgPath then requestSave() end
                 stopListening()
             end
         end)
     end
-
-    btn.MouseButton1Click:Connect(function()
-        if listening then stopListening() else startListening() end
-    end)
-
+    btn.MouseButton1Click:Connect(function() if listening then stopListening() else startListening() end end)
     if cfgPath then
         registerSave(cfgPath,
-            function()
-                local b = readCfg(cfgPath)
-                if type(b) == "table" and b.kind then return b end
-                return nil
-            end,
+            function() local b = readCfg(cfgPath); if type(b)=="table" and b.kind then return b end return nil end,
             function(b)
                 if type(b) ~= "table" or not b.kind then return end
                 local v
@@ -520,7 +508,6 @@ local function makeKeybind(parentCol, label, cfgPath, defaultBind, callback)
             end
         )
     end
-
     if callback and defaultBind then callback(defaultBind) end
 end
 
@@ -541,7 +528,6 @@ do
     makeToggle(R, "Draw FOV", "Aimbot.DrawFOV", Config.Aimbot.DrawFOV, function(v) Config.Aimbot.DrawFOV = v end)
     makeToggle(R, "Snapline", "Aimbot.Snapline", Config.Aimbot.Snapline, function(v) Config.Aimbot.Snapline = v end)
     makeSection(R, "Aimbot Checks")
-    makeToggle(R, "Team Check", "Aimbot.TeamCheck", Config.Aimbot.TeamCheck, function(v) Config.Aimbot.TeamCheck = v end)
     makeToggle(R, "Visibility Check", "Aimbot.VisCheck", Config.Aimbot.VisCheck, function(v) Config.Aimbot.VisCheck = v end)
     makeToggle(R, "Wall Check", "Aimbot.WallCheck", Config.Aimbot.WallCheck, function(v) Config.Aimbot.WallCheck = v end)
 end
@@ -571,7 +557,6 @@ do
     makeToggle(R, "Burst Mode", "Triggerbot.Burst", Config.Triggerbot.Burst, function(v) Config.Triggerbot.Burst = v end)
     makeSlider(R, "Burst Count", "Triggerbot.BurstCount", 1, 10, Config.Triggerbot.BurstCount, 0, function(v) Config.Triggerbot.BurstCount = v end)
     makeSection(R, "Checks")
-    makeToggle(R, "Team Check", "Triggerbot.TeamCheck", Config.Triggerbot.TeamCheck, function(v) Config.Triggerbot.TeamCheck = v end)
     makeToggle(R, "Visibility Check", "Triggerbot.VisCheck", Config.Triggerbot.VisCheck, function(v) Config.Triggerbot.VisCheck = v end)
 end
 
@@ -582,7 +567,6 @@ do
     local R = makeColumn(tab, "right")
     makeSection(L, "Visuals")
     makeToggle(L, "Enabled", "Visuals.Enabled", Config.Visuals.Enabled, function(v) Config.Visuals.Enabled = v end)
-    makeToggle(L, "Team Check", "Visuals.TeamCheck", Config.Visuals.TeamCheck, function(v) Config.Visuals.TeamCheck = v end)
     makeToggle(L, "Visibility Check", "Visuals.VisCheck", Config.Visuals.VisCheck, function(v) Config.Visuals.VisCheck = v end)
     makeSlider(L, "Max Distance", "Visuals.MaxDistance", 0, 5000, Config.Visuals.MaxDistance, 0, function(v) Config.Visuals.MaxDistance = v end)
     makeSection(L, "Box")
@@ -600,6 +584,7 @@ do
     makeToggle(R, "Head Dot", "Visuals.HeadDot", Config.Visuals.HeadDot, function(v) Config.Visuals.HeadDot = v end)
     makeToggle(R, "Tracer", "Visuals.Tracer", Config.Visuals.Tracer, function(v) Config.Visuals.Tracer = v end)
     makeToggle(R, "Skeleton", "Visuals.Skeleton", Config.Visuals.Skeleton, function(v) Config.Visuals.Skeleton = v end)
+    makeToggle(R, "Weapon", "Visuals.Weapon", Config.Visuals.Weapon, function(v) Config.Visuals.Weapon = v end)
     makeToggle(R, "Team Color", "Visuals.TeamColor", Config.Visuals.TeamColor, function(v) Config.Visuals.TeamColor = v end)
 end
 
@@ -608,14 +593,12 @@ do
     local tab = Tabs.Settings
     local L = makeColumn(tab, "left")
     local R = makeColumn(tab, "right")
-
     makeSection(L, "하늘 색")
     makeDropdown(L, "Sky Preset", "Skybox",
         {"Default","Space","Red","Orange","Yellow","Green","Blue","Purple","Pink","Night","Sunset","Dawn"},
         Config.Skybox,
         function(v) Config.Skybox = v; applySkybox(v) end
     )
-
     makeSection(L, "조명")
     makeToggle(L, "Fullbright", nil, false, function(v)
         if v then
@@ -626,7 +609,6 @@ do
             restoreOriginal()
         end
     end)
-
     makeSection(R, "설정 저장")
     do
         local row = new("Frame", {Size=UDim2.new(1,0,0,26), BackgroundTransparency=1, Parent=R})
@@ -634,30 +616,19 @@ do
         corner(3)
         local loadBtn = new("TextButton", {Size=UDim2.new(0.5,-3,1,0), Position=UDim2.new(0.5,3,0,0), BackgroundColor3=Colors.Panel, BorderSizePixel=0, Font=Enum.Font.GothamSemibold, Text="Load", TextColor3=Colors.Text, TextSize=11, Parent=row})
         corner(3)
-        saveBtn.MouseButton1Click:Connect(function()
-            saveConfig()
-            saveBtn.Text = "Saved!"
-            task.delay(1, function() saveBtn.Text = "Save" end)
-        end)
-        loadBtn.MouseButton1Click:Connect(function()
-            loadConfig()
-            loadBtn.Text = "Loaded!"
-            task.delay(1, function() loadBtn.Text = "Load" end)
-        end)
+        saveBtn.MouseButton1Click:Connect(function() saveNow(); saveBtn.Text = "Saved!"; task.delay(1, function() saveBtn.Text = "Save" end) end)
+        loadBtn.MouseButton1Click:Connect(function() loadConfig(); loadBtn.Text = "Loaded!"; task.delay(1, function() loadBtn.Text = "Load" end) end)
     end
-
     do
         local row = new("Frame", {Size=UDim2.new(1,0,0,26), BackgroundTransparency=1, Parent=R})
-        local resetBtn = new("TextButton", {Size=UDim2.new(1,0,1,0), BackgroundColor3=Colors.Danger, BorderSizePixel=0, Font=Enum.Font.GothamSemibold, Text="Reset Config (delete save file)", TextColor3=Color3.fromRGB(255,255,255), TextSize=11, Parent=row})
+        local resetBtn = new("TextButton", {Size=UDim2.new(1,0,1,0), BackgroundColor3=Colors.Danger, BorderSizePixel=0, Font=Enum.Font.GothamSemibold, Text="Reset Config", TextColor3=Color3.fromRGB(255,255,255), TextSize=11, Parent=row})
         corner(3)
         resetBtn.MouseButton1Click:Connect(function()
             resetConfig()
             resetBtn.Text = "Deleted!"
-            task.delay(1.2, function() resetBtn.Text = "Reset Config (delete save file)" end)
+            task.delay(1.2, function() resetBtn.Text = "Reset Config" end)
         end)
     end
-
-    local infoLbl = new("TextLabel", {Size=UDim2.new(1,0,0,50), BackgroundTransparency=1, Font=Enum.Font.Gotham, TextWrapped=true, TextColor3=Colors.SubText, TextSize=10, TextXAlignment=Enum.TextXAlignment.Left, Text="Auto-saves on every change. Add this script to executor's autoexec folder to reload on teleport.", Parent=R})
 end
 
 for _, t in pairs(Tabs) do
@@ -680,13 +651,11 @@ end
 task.spawn(function()
     task.wait(0.3)
     pcall(loadConfig)
-    -- reapply skybox from loaded value
     pcall(function() applySkybox(Config.Skybox or "Default") end)
 end)
 
 --// UTIL
 local function getCam() return workspace.CurrentCamera end
-
 local function isVisible(part, targetChar)
     local cam = getCam()
     if not cam or not part or not targetChar then return false end
@@ -697,7 +666,6 @@ local function isVisible(part, targetChar)
     if result and result.Instance then return result.Instance:IsDescendantOf(targetChar) end
     return true
 end
-
 local function toScreen(cam, worldPos)
     local s, onScreen = cam:WorldToViewportPoint(worldPos)
     if not onScreen then return nil end
@@ -730,7 +698,6 @@ local function updateChams(player)
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local show = Config.Visuals.Chams and Config.Visuals.Enabled
         and player ~= LP and char and hum and hum.Health > 0
-    if show and Config.Visuals.TeamCheck and sameTeam(player, LP) then show = false end
     if show and Config.Visuals.VisCheck then
         local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
         if head and not isVisible(head, char) then show = false end
@@ -761,7 +728,6 @@ local BONES_R6 = {
     {"Torso","Left Leg"},{"Torso","Right Leg"},
 }
 local DRAW_OK = Drawing and Drawing.new and true or false
-
 local function drawing(class, props)
     if not DRAW_OK then return nil end
     local ok, d = pcall(function() return Drawing.new(class) end)
@@ -769,7 +735,6 @@ local function drawing(class, props)
     for k, v in pairs(props or {}) do pcall(function() d[k] = v end) end
     return reg(d)
 end
-
 local function getRig(char)
     if char:FindFirstChild("UpperTorso") then return "R15", BONES_R15 end
     if char:FindFirstChild("Torso") then return "R6", BONES_R6 end
@@ -783,6 +748,7 @@ local function createESP(player)
     o.box      = drawing("Square", {Thickness=1, Filled=false, Color=Config.Visuals.Color, Visible=false, Transparency=1})
     o.boxFill  = drawing("Square", {Filled=true, Color=Config.Visuals.Color, Visible=false, Transparency=0.15})
     o.name     = drawing("Text", {Size=13, Center=true, Outline=true, Color=Color3.fromRGB(255,255,255), Visible=false, Font=2})
+    o.weapon   = drawing("Text", {Size=12, Center=true, Outline=true, Color=Color3.fromRGB(255,210,120), Visible=false, Font=2})
     o.distance = drawing("Text", {Size=12, Center=true, Outline=true, Color=Color3.fromRGB(200,200,200), Visible=false, Font=2})
     o.health   = drawing("Line", {Thickness=2, Color=Color3.fromRGB(0,255,0), Visible=false, Transparency=1})
     o.healthBg = drawing("Line", {Thickness=2, Color=Color3.fromRGB(0,0,0), Visible=false, Transparency=1})
@@ -823,6 +789,70 @@ task.spawn(function()
     end
 end)
 
+--// WEAPON DETECTION (multi-method)
+local function getWeaponName(char)
+    if not char then return nil end
+    local player = Players:GetPlayerFromCharacter(char)
+
+    -- 1) Tool directly under character
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool then return weaponNameKR(tool.Name) end
+
+    -- 2) Tool deeper in character
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("Tool") then return weaponNameKR(d.Name) end
+    end
+
+    -- 3) Common direct child value holders
+    for _, key in ipairs({"Weapon", "EquippedWeapon", "CurrentWeapon", "Gun", "Equipped"}) do
+        local v = char:FindFirstChild(key)
+        if v then
+            if v:IsA("StringValue") and v.Value ~= "" then return weaponNameKR(v.Value) end
+            if v:IsA("ObjectValue") and v.Value then return weaponNameKR(v.Value.Name) end
+        end
+    end
+
+    -- 4) Nested value holders with weapon-ish names
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("StringValue") or d:IsA("ObjectValue") then
+            local n = d.Name:lower()
+            if n:find("weapon") or n:find("gun") or n:find("equip") then
+                if d:IsA("StringValue") and d.Value ~= "" then return weaponNameKR(d.Value) end
+                if d:IsA("ObjectValue") and d.Value then return weaponNameKR(d.Value.Name) end
+            end
+        end
+    end
+
+    -- 5) Character attributes
+    for _, a in ipairs(char:GetAttributes()) do
+        local al = a:lower()
+        if al:find("weapon") or al:find("gun") or al:find("equip") then
+            local v = char:GetAttribute(a)
+            if typeof(v) == "string" and v ~= "" then return weaponNameKR(v) end
+        end
+    end
+
+    -- 6) Player object
+    if player then
+        for _, key in ipairs({"Weapon", "EquippedWeapon", "CurrentWeapon", "Gun"}) do
+            local v = player:FindFirstChild(key)
+            if v then
+                if v:IsA("StringValue") and v.Value ~= "" then return weaponNameKR(v.Value) end
+                if v:IsA("ObjectValue") and v.Value then return weaponNameKR(v.Value.Name) end
+            end
+        end
+        for _, a in ipairs(player:GetAttributes()) do
+            local al = a:lower()
+            if al:find("weapon") or al:find("gun") or al:find("equip") then
+                local v = player:GetAttribute(a)
+                if typeof(v) == "string" and v ~= "" then return weaponNameKR(v) end
+            end
+        end
+    end
+
+    return nil
+end
+
 local function updateOne(player, o)
     local cam = getCam()
     if not cam or not o or not o.box then return end
@@ -830,8 +860,9 @@ local function updateOne(player, o)
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local render = true
-    if not Config.Visuals.Enabled or player == LP or not char or not hum or not hrp or hum.Health <= 0
-        or (Config.Visuals.TeamCheck and sameTeam(player, LP)) then render = false end
+    if not Config.Visuals.Enabled or player == LP or not char or not hum or not hrp or hum.Health <= 0 then
+        render = false
+    end
     if render then
         if (cam.CFrame.Position - hrp.Position).Magnitude > Config.Visuals.MaxDistance then render = false end
         if render and Config.Visuals.VisCheck and not isVisible(char:FindFirstChild("Head") or hrp, char) then render = false end
@@ -849,6 +880,7 @@ local function updateOne(player, o)
     local width  = height * 0.55 * (1 + Config.Visuals.BoxPadding)
     local x, y = topS.X - width/2, topS.Y
     local col = Config.Visuals.TeamColor and teamColor(player) or Config.Visuals.Color
+
     if Config.Visuals.Box and o.box then
         o.box.Visible = true; o.box.Color = col
         o.box.Size = Vector2.new(width, height); o.box.Position = Vector2.new(x, y)
@@ -860,6 +892,19 @@ local function updateOne(player, o)
     if Config.Visuals.Name and o.name then
         o.name.Visible = true; o.name.Text = player.Name
         o.name.Position = Vector2.new(topS.X, y - 16); o.name.Color = col
+    end
+    if Config.Visuals.Weapon and o.weapon then
+        local wname = getWeaponName(char)
+        if wname then
+            o.weapon.Visible = true
+            o.weapon.Text = wname
+            if Config.Visuals.Name then
+                o.weapon.Position = Vector2.new(topS.X, y - 30)
+            else
+                o.weapon.Position = Vector2.new(topS.X, y - 16)
+            end
+            o.weapon.Color = Color3.fromRGB(255, 210, 120)
+        end
     end
     if Config.Visuals.Distance and o.distance then
         local d = (cam.CFrame.Position - hrp.Position).Magnitude
@@ -939,7 +984,7 @@ local function pickPart(char, mode)
     return best
 end
 
-local function scanFOV(fov, maxDist, teamCheck, visCheck, wallCheck, partMode)
+local function scanFOV(fov, maxDist, visCheck, wallCheck, partMode)
     local cam = getCam(); if not cam then return nil end
     local center = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
     local closest, closestFov = nil, math.huge
@@ -949,7 +994,6 @@ local function scanFOV(fov, maxDist, teamCheck, visCheck, wallCheck, partMode)
         local hum = char:FindFirstChildOfClass("Humanoid")
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hum or hum.Health <= 0 or not hrp then continue end
-        if teamCheck and sameTeam(p, LP) then continue end
         if (cam.CFrame.Position - hrp.Position).Magnitude > maxDist then continue end
         local part = pickPart(char, partMode); if not part then continue end
         local s = toScreen(cam, part.Position); if not s then continue end
@@ -966,11 +1010,8 @@ end
 
 --// AIMBOT
 local savedCamType = nil
-
 local function applyAimbot()
-    local cam = getCam()
-    if not cam then return end
-
+    local cam = getCam(); if not cam then return end
     if Config.Aimbot.ScriptableCamera then
         if Config.Aimbot.Enabled then
             if cam.CameraType ~= Enum.CameraType.Scriptable then
@@ -984,16 +1025,13 @@ local function applyAimbot()
             end
         end
     end
-
     if not Config.Aimbot.Enabled then return end
-
     local t = scanFOV(
         Config.Aimbot.FOV, Config.Aimbot.MaxDistance,
-        Config.Aimbot.TeamCheck, Config.Aimbot.VisCheck, Config.Aimbot.WallCheck,
+        Config.Aimbot.VisCheck, Config.Aimbot.WallCheck,
         Config.Aimbot.TargetPart
     )
     if not t then return end
-
     local aimPos = t.part.Position + Config.Aimbot.Offset
     if Config.Aimbot.Prediction > 0 and t.part.AssemblyLinearVelocity then
         aimPos = aimPos + t.part.AssemblyLinearVelocity * Config.Aimbot.Prediction
@@ -1004,14 +1042,12 @@ end
 --// TRIGGERBOT
 local triggerBusy = false
 local keyHeld = false
-
 UserInputService.InputBegan:Connect(function(i)
     if inputMatchesBind(i, Config.Triggerbot.Bind) then keyHeld = true end
 end)
 UserInputService.InputEnded:Connect(function(i)
     if inputMatchesBind(i, Config.Triggerbot.Bind) then keyHeld = false end
 end)
-
 task.spawn(function()
     while task.wait(0.05) do
         local b = Config.Triggerbot.Bind
@@ -1032,7 +1068,6 @@ local function crosshairTarget()
         if model then
             local plr = Players:GetPlayerFromCharacter(model)
             if plr and plr ~= LP then
-                if Config.Triggerbot.TeamCheck and sameTeam(plr, LP) then return nil end
                 local hrp = model:FindFirstChild("HumanoidRootPart")
                 if hrp and (cam.CFrame.Position - hrp.Position).Magnitude > Config.Triggerbot.MaxDistance then return nil end
                 local hum = model:FindFirstChildOfClass("Humanoid")
@@ -1046,17 +1081,14 @@ end
 local function findKeyTarget()
     return scanFOV(
         Config.Triggerbot.KeyFOV, Config.Triggerbot.MaxDistance,
-        Config.Triggerbot.TeamCheck, Config.Triggerbot.VisCheck, false,
-        "Head"
+        Config.Triggerbot.VisCheck, false, "Head"
     )
 end
-
 local function findAutoTarget()
     if Config.Triggerbot.Mode == "FOV" then
         return scanFOV(
             Config.Triggerbot.FOV, Config.Triggerbot.MaxDistance,
-            Config.Triggerbot.TeamCheck, Config.Triggerbot.VisCheck, false,
-            Config.Triggerbot.TargetPart
+            Config.Triggerbot.VisCheck, false, Config.Triggerbot.TargetPart
         )
     end
     return crosshairTarget()
@@ -1069,7 +1101,6 @@ local function fireOnce()
     task.wait(Config.Triggerbot.ClickDuration / 1000)
     pcall(function() vim:SendMouseButtonEvent(cam.ViewportSize.X/2, cam.ViewportSize.Y/2, 0, false, game, 0) end)
 end
-
 local function doFire()
     if triggerBusy then return end
     if math.random(1, 100) > Config.Triggerbot.Hitchance then return end
@@ -1085,7 +1116,6 @@ local function doFire()
         task.wait(0.05); triggerBusy = false
     end)
 end
-
 local function applyTrigger()
     if not Config.Triggerbot.Enabled then return end
     if Config.Triggerbot.UseKey then
@@ -1112,7 +1142,6 @@ local snapline         = drawing("Line",   {Thickness=1, Color=Color3.fromRGB(25
 
 --// MAIN LOOP
 local aimErrPrinted = false
-
 local function tickAimbot()
     local ok, err = pcall(applyAimbot)
     if not ok and not aimErrPrinted then
@@ -1120,12 +1149,10 @@ local function tickAimbot()
         warn("[크랙본 by R0W] Aimbot error: " .. tostring(err))
     end
 end
-
 local function tickDrawings()
     pcall(updateESP)
     local cam = getCam(); if not cam then return end
     local cx, cy = cam.ViewportSize.X/2, cam.ViewportSize.Y/2
-
     if aimFovCircle and Config.Aimbot.Enabled and Config.Aimbot.DrawFOV then
         aimFovCircle.Visible = true
         aimFovCircle.Position = Vector2.new(cx, cy)
@@ -1147,7 +1174,7 @@ local function tickDrawings()
     if snapline and Config.Aimbot.Enabled and Config.Aimbot.Snapline then
         local t = scanFOV(
             Config.Aimbot.FOV, Config.Aimbot.MaxDistance,
-            Config.Aimbot.TeamCheck, Config.Aimbot.VisCheck, Config.Aimbot.WallCheck,
+            Config.Aimbot.VisCheck, Config.Aimbot.WallCheck,
             Config.Aimbot.TargetPart
         )
         if t then
@@ -1174,6 +1201,6 @@ UserInputService.InputBegan:Connect(function(i, gpe)
 end)
 
 if not DRAW_OK then warn("[크랙본 by R0W] No Drawing API — ESP won't render.") end
-if not Save.canSave then warn("[크랙본 by R0W] writefile/readfile not supported — config won't persist.") end
+if not Save.canSave then warn("[크랙본 by R0W] writefile not supported — config won't persist.") end
 
 print("[크랙본 by R0W] loaded — F1 UI, F2 purge.")
