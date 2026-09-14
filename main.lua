@@ -1,18 +1,13 @@
 --//=========================================================
---// 크랙본 by R0W | Full build
---// TeamCheck removed. Auto-saves config. DataModel-safe.
---// F1 UI, F2 purge.
+--// 크랙본 by R0W | Full build (no weapon ESP)
+--// F1 UI, F2 purge. Drag via top bar.
 --//=========================================================
 
---// GAME CONTEXT GUARD — skip if not in a game DataModel
+--// GAME CONTEXT GUARD
 local okPlayers, Players = pcall(function() return game:GetService("Players") end)
-if not okPlayers or not Players then
-    return
-end
+if not okPlayers or not Players then return end
 local okLP, LP = pcall(function() return Players.LocalPlayer end)
-if not okLP or not LP then
-    return
-end
+if not okLP or not LP then return end
 
 local RunService        = game:GetService("RunService")
 local UserInputService  = game:GetService("UserInputService")
@@ -25,9 +20,7 @@ for _, g in ipairs(CoreGui:GetChildren()) do
     if g.Name == "crackbonUI" or g.Name == "SerotoninUI" then pcall(function() g:Destroy() end) end
 end
 
---//=========================================================
 --// SAVE SYSTEM — debounced
---//=========================================================
 local Save = {
     path = "crackbon_cfg.json",
     entries = {},
@@ -138,25 +131,7 @@ local function inputMatchesBind(input, bind)
     return false
 end
 
---// WEAPON KR MAP
-local WEAPON_KR = {
-    ["Pistol"]="권총",["Revolver"]="리볼버",["Deagle"]="데저트이글",
-    ["SMG"]="기관단총",["Uzi"]="우지",["MP5"]="MP5",["Rifle"]="소총",
-    ["AssaultRifle"]="돌격소총",["AK47"]="AK-47",["M4"]="M4",
-    ["Shotgun"]="산탄총",["Sniper"]="저격총",["SniperRifle"]="저격소총",
-    ["Bow"]="활",["Crossbow"]="석궁",["RPG"]="로켓발사기",["Grenade"]="수류탄",
-    ["LMG"]="경기관총",["DMR"]="지정사수소총",["Knife"]="칼",["Sword"]="검",
-    ["Katana"]="카타나",["Minigun"]="미니건",["Flamethrower"]="화염방사기",
-}
-local function weaponNameKR(name)
-    if not name or name == "" then return "?" end
-    if WEAPON_KR[name] then return WEAPON_KR[name] end
-    local stripped = name:gsub("%s+","")
-    if WEAPON_KR[stripped] then return WEAPON_KR[stripped] end
-    return name
-end
-
---// CONFIG (no TeamCheck)
+--// CONFIG
 local DEFAULT_BIND = { kind="key", value=Enum.KeyCode.LeftShift, name="LeftShift" }
 local Config = {
     Skybox = "Default",
@@ -164,7 +139,7 @@ local Config = {
         Enabled=false, VisCheck=false, MaxDistance=1000,
         Box=false, BoxFilled=false, BoxPadding=0.5,
         Name=false, Distance=false, Health=false, HeadDot=false,
-        Tracer=false, Skeleton=false, Weapon=false,
+        Tracer=false, Skeleton=false,
         Chams=false, ChamsFill=Color3.fromRGB(0,200,200), ChamsOutline=Color3.fromRGB(255,255,255),
         ChamsThroughWalls=true, ChamsTransparency=0.6,
         Color=Color3.fromRGB(0,220,220), TeamColor=false,
@@ -204,7 +179,7 @@ local function writeCfg(path, v)
     cur[parts[#parts]] = v
 end
 
---// TEAM COLOR (visual tinting only)
+--// TEAM COLOR (visual tint only)
 local function teamColor(player)
     if player.Team then return player.TeamColor.Color end
     if player.TeamColor then return player.TeamColor.Color end
@@ -584,7 +559,6 @@ do
     makeToggle(R, "Head Dot", "Visuals.HeadDot", Config.Visuals.HeadDot, function(v) Config.Visuals.HeadDot = v end)
     makeToggle(R, "Tracer", "Visuals.Tracer", Config.Visuals.Tracer, function(v) Config.Visuals.Tracer = v end)
     makeToggle(R, "Skeleton", "Visuals.Skeleton", Config.Visuals.Skeleton, function(v) Config.Visuals.Skeleton = v end)
-    makeToggle(R, "Weapon", "Visuals.Weapon", Config.Visuals.Weapon, function(v) Config.Visuals.Weapon = v end)
     makeToggle(R, "Team Color", "Visuals.TeamColor", Config.Visuals.TeamColor, function(v) Config.Visuals.TeamColor = v end)
 end
 
@@ -647,7 +621,6 @@ for _, t in pairs(Tabs) do
     end)
 end
 
---// LOAD SAVED CONFIG
 task.spawn(function()
     task.wait(0.3)
     pcall(loadConfig)
@@ -748,7 +721,6 @@ local function createESP(player)
     o.box      = drawing("Square", {Thickness=1, Filled=false, Color=Config.Visuals.Color, Visible=false, Transparency=1})
     o.boxFill  = drawing("Square", {Filled=true, Color=Config.Visuals.Color, Visible=false, Transparency=0.15})
     o.name     = drawing("Text", {Size=13, Center=true, Outline=true, Color=Color3.fromRGB(255,255,255), Visible=false, Font=2})
-    o.weapon   = drawing("Text", {Size=12, Center=true, Outline=true, Color=Color3.fromRGB(255,210,120), Visible=false, Font=2})
     o.distance = drawing("Text", {Size=12, Center=true, Outline=true, Color=Color3.fromRGB(200,200,200), Visible=false, Font=2})
     o.health   = drawing("Line", {Thickness=2, Color=Color3.fromRGB(0,255,0), Visible=false, Transparency=1})
     o.healthBg = drawing("Line", {Thickness=2, Color=Color3.fromRGB(0,0,0), Visible=false, Transparency=1})
@@ -789,70 +761,6 @@ task.spawn(function()
     end
 end)
 
---// WEAPON DETECTION (multi-method)
-local function getWeaponName(char)
-    if not char then return nil end
-    local player = Players:GetPlayerFromCharacter(char)
-
-    -- 1) Tool directly under character
-    local tool = char:FindFirstChildOfClass("Tool")
-    if tool then return weaponNameKR(tool.Name) end
-
-    -- 2) Tool deeper in character
-    for _, d in ipairs(char:GetDescendants()) do
-        if d:IsA("Tool") then return weaponNameKR(d.Name) end
-    end
-
-    -- 3) Common direct child value holders
-    for _, key in ipairs({"Weapon", "EquippedWeapon", "CurrentWeapon", "Gun", "Equipped"}) do
-        local v = char:FindFirstChild(key)
-        if v then
-            if v:IsA("StringValue") and v.Value ~= "" then return weaponNameKR(v.Value) end
-            if v:IsA("ObjectValue") and v.Value then return weaponNameKR(v.Value.Name) end
-        end
-    end
-
-    -- 4) Nested value holders with weapon-ish names
-    for _, d in ipairs(char:GetDescendants()) do
-        if d:IsA("StringValue") or d:IsA("ObjectValue") then
-            local n = d.Name:lower()
-            if n:find("weapon") or n:find("gun") or n:find("equip") then
-                if d:IsA("StringValue") and d.Value ~= "" then return weaponNameKR(d.Value) end
-                if d:IsA("ObjectValue") and d.Value then return weaponNameKR(d.Value.Name) end
-            end
-        end
-    end
-
-    -- 5) Character attributes
-    for _, a in ipairs(char:GetAttributes()) do
-        local al = a:lower()
-        if al:find("weapon") or al:find("gun") or al:find("equip") then
-            local v = char:GetAttribute(a)
-            if typeof(v) == "string" and v ~= "" then return weaponNameKR(v) end
-        end
-    end
-
-    -- 6) Player object
-    if player then
-        for _, key in ipairs({"Weapon", "EquippedWeapon", "CurrentWeapon", "Gun"}) do
-            local v = player:FindFirstChild(key)
-            if v then
-                if v:IsA("StringValue") and v.Value ~= "" then return weaponNameKR(v.Value) end
-                if v:IsA("ObjectValue") and v.Value then return weaponNameKR(v.Value.Name) end
-            end
-        end
-        for _, a in ipairs(player:GetAttributes()) do
-            local al = a:lower()
-            if al:find("weapon") or al:find("gun") or al:find("equip") then
-                local v = player:GetAttribute(a)
-                if typeof(v) == "string" and v ~= "" then return weaponNameKR(v) end
-            end
-        end
-    end
-
-    return nil
-end
-
 local function updateOne(player, o)
     local cam = getCam()
     if not cam or not o or not o.box then return end
@@ -892,19 +800,6 @@ local function updateOne(player, o)
     if Config.Visuals.Name and o.name then
         o.name.Visible = true; o.name.Text = player.Name
         o.name.Position = Vector2.new(topS.X, y - 16); o.name.Color = col
-    end
-    if Config.Visuals.Weapon and o.weapon then
-        local wname = getWeaponName(char)
-        if wname then
-            o.weapon.Visible = true
-            o.weapon.Text = wname
-            if Config.Visuals.Name then
-                o.weapon.Position = Vector2.new(topS.X, y - 30)
-            else
-                o.weapon.Position = Vector2.new(topS.X, y - 16)
-            end
-            o.weapon.Color = Color3.fromRGB(255, 210, 120)
-        end
     end
     if Config.Visuals.Distance and o.distance then
         local d = (cam.CFrame.Position - hrp.Position).Magnitude
